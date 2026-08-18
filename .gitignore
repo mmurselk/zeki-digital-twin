@@ -1,0 +1,20 @@
+# colcon build artifacts - regenerated on every build, never commit
+build/
+install/
+log/
+
+# rosbag recordings - too large for git, document how to obtain instead
+rosbag2_*/
+*.db3
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Windows download marker clutter
+*.Zone.Identifier
+
+# editor/OS noise
+.vscode/
+.DS_Store

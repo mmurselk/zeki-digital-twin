@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>bridge_pipeline</name>
+  <version>0.0.1</version>
+  <description>Raw ROS 2 topic pipeline bridged to a partner web backend via rosbridge_websocket.</description>
+
+  <maintainer email="dev@example.com">Bridge Pipeline Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- bridge.launch.py includes rosbridge_websocket_launch.xml from this package -->
+  <exec_depend>rosbridge_server</exec_depend>
+
+  <!-- required by bridge.launch.py's imports -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- not needed until camera_relay_node.py / pointcloud_filter_node.py are unparked -->
+  <!-- <exec_depend>rclpy</exec_depend> -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

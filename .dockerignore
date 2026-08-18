@@ -1,0 +1,14 @@
+build/
+install/
+log/
+
+rosbag2_*/
+*.db3
+
+__pycache__/
+*.pyc
+.pytest_cache/
+
+*.Zone.Identifier
+.git/
+.vscode/

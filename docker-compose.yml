@@ -1,0 +1,13 @@
+services:
+  bridge_pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./src:/ros2_ws/src
+      - ./rosbag2_2024_03_19-15_18_39:/bags/rosbag2_2024_03_19-15_18_39
+    ports:
+      - "9090:9090"
+    stdin_open: true
+    tty: true
+    command: bash
