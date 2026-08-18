@@ -1,0 +1,20 @@
+point_cloud_filter_node:
+  ros__parameters:
+    input_topic: /lidars/points_fused_throttle
+    output_topic: /lidars/points_fused_filtered
+    voxel_size: 0.3   # meters - tested as a good detail/bandwidth balance
+
+multicamera_relay:
+  ros__parameters:
+    input_topic: /camera_front_wide/image/compressed
+    output_topic: /camera_front_wide/image/compressed_relay
+    target_width: 960
+    jpeg_quality: 60
+    target_hz: 0.0    # 0 = no throttling, rely on resize+quality for compression
+
+    # adaptive feedback settings
+    feedback_topic: /frontend/perf_feedback
+    min_hz: 1.0
+    max_hz: 8.0
+    feedback_timeout_sec: 5.0
+    smoothing_alpha: 0.3

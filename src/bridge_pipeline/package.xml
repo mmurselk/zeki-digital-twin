@@ -16,6 +16,8 @@
   <!-- required by bridge.launch.py's imports -->
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>autoware_auto_vehicle_msgs</exec_depend>
+  <exec_depend>tier4_vehicle_msgs</exec_depend>
 
   <!-- not needed until camera_relay_node.py / pointcloud_filter_node.py are unparked -->
   <!-- <exec_depend>rclpy</exec_depend> -->
