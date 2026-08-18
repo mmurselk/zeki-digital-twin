@@ -2,6 +2,14 @@
 
 A containerized ROS 2 pipeline that bridges vehicle sensor topics (camera, LiDAR, GPS/pose, vehicle status) to a web-based live visualization over `rosbridge`.
 
+## Usage
+
+Watch the demo below to see the project in action:
+
+
+<img width="800" height="450" alt="Image" src="https://github.com/user-attachments/assets/20ae38bf-6629-4074-9520-597ee0a1489e" />
+
+
 ## Structure
 
 ```
