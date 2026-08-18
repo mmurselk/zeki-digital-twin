@@ -18,6 +18,7 @@ A containerized ROS 2 pipeline that bridges vehicle sensor topics (camera, LiDAR
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (with WSL2 backend on Windows)
 - A rosbag recording to play back (not included in this repo — see below)
 - A free [Mapbox access token](https://account.mapbox.com/access-tokens/) for the web viewer
+- **Custom ROS 2 Messages:** The bridge pipeline requires custom message definitions to properly deserialize the vehicle's status data. You need to have the following repositories in your `src/` directory:  - [autoware_auto_msgs](https://github.com/tier4/autoware_auto_msgs)  - [tier4_autoware_msgs](https://github.com/tier4/tier4_autoware_msgs)
 
 ## Setup
 
@@ -47,10 +48,20 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:=9090
 
 You should see `Rosbridge WebSocket server started on port 9090`. Leave this running.
 
-### 4. Play the rosbag (in a second terminal, inside the container)
+### 4. Build custom messages and play the rosbag
+
+In a second terminal, open another bash session inside the container. Before playing the bag, you need to build the custom vehicle messages so that `rosbridge` can properly interpret the vehicle status data.
 
 ```bash
 docker compose exec bridge_pipeline bash
+
+# 1. Build ONLY the required message packages
+colcon build --packages-up-to autoware_auto_vehicle_msgs tier4_vehicle_msgs
+
+# 2. Source the newly built workspace
+source install/setup.bash
+
+# 3. Play the bag
 ros2 bag play /bags/rosbag2_2024_03_19-15_18_39
 ```
 
