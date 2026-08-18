@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Live Mapbox Point Cloud Stream</title>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/deck.gl@8.9.0/dist.min.js"></script>
+<script src="https://unpkg.com/roslib@1/build/roslib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cbor-js@0.1.0/cbor.js"></script>
+<style>
+  body { font-family: sans-serif; margin: 0; padding: 16px; background: #111; color: #eee; }
+  .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+  input, select { padding: 6px; border-radius: 4px; border: 1px solid #444; background: #222; color: #eee; }
+  button { padding: 6px 14px; border-radius: 4px; border: none; background: #2a6; color: #fff; cursor: pointer; }
+  #status { font-size: 13px; color: #9c9; margin-bottom: 16px; }
+  h3 { margin: 0 0 8px; font-size: 14px; color: #ccc; }
+
+  .viewer-row { display: flex; gap: 20px; width: 100%; align-items: flex-start; }
+  .viewer-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  #map-wrap { position: relative; width: 100%; height: 500px; background: #000; border-radius: 8px; overflow: hidden; }
+
+  .camera-panel { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+
+  .main-cam-view {
+    width: 100%;
+    height: 380px;
+    background: #000;
+    border-radius: 8px;
+    border: 1px solid #333;
+    position: relative;
+    overflow: hidden;
+  }
+  .main-cam-view img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .cam-overlay-text {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: bold;
+    pointer-events: none;
+  }
+
+  .thumbnail-strip {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
+  .thumbnail-strip::-webkit-scrollbar { height: 8px; }
+  .thumbnail-strip::-webkit-scrollbar-track { background: #222; border-radius: 4px; }
+  .thumbnail-strip::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+
+  .thumbnail-box {
+    width: 160px;
+    height: 100px;
+    background: #111;
+    border-radius: 6px;
+    border: 2px solid #333;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.2s ease-in-out;
+    flex-shrink: 0;
+  }
+  .thumbnail-box:hover { border-color: #777; }
+  .thumbnail-box.active { border-color: #2a6; box-shadow: 0 0 10px rgba(34, 170, 102, 0.4); }
+
+  .thumbnail-box img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+  }
+  .thumbnail-box.active img, .thumbnail-box:hover img { opacity: 1; }
+
+  .thumbnail-label {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+    color: #ddd;
+    font-size: 11px;
+    padding: 12px 6px 4px 6px;
+    text-align: center;
+    pointer-events: none;
+  }
+  .thumbnail-inactive-note {
+    position: absolute;
+    top: 4px; right: 6px;
+    font-size: 9px;
+    color: #666;
+    pointer-events: none;
+  }
+
+  .vehicle-hud { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 6px; }
+  .hud-stat {
+    background: #151515;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 8px 14px;
+    min-width: 96px;
+  }
+  .hud-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .hud-value { font-size: 18px; font-weight: bold; color: #ddd; transition: color 0.2s; }
+  .hud-value.ok   { color: #2ecc71; }
+  .hud-value.info { color: #4ea1f3; }
+  .hud-value.warn { color: #f5b942; }
+  .hud-value.bad  { color: #e74c3c; }
+</style>
+</head>
+<body>
+
+<h3>Connection</h3>
+<div class="row">
+  <input id="host" placeholder="host" value="192.168.137.1" size="14">
+  <input id="port" placeholder="port" value="9090" size="6">
+  <button onclick="connect()">Connect</button>
+</div>
+<div id="status">Not connected.</div>
+<div id="render-fps" style="font-size:12px;color:#6c9;margin-bottom:8px;">FPS: --</div>
+
+<h3>Vehicle Status</h3>
+<div id="vehicle-hud" class="vehicle-hud">
+  <div class="hud-stat"><div class="hud-label">Mode</div><div class="hud-value" id="hud-control-mode">--</div></div>
+  <div class="hud-stat"><div class="hud-label">Gear</div><div class="hud-value" id="hud-gear">--</div></div>
+  <div class="hud-stat"><div class="hud-label">Speed</div><div class="hud-value" id="hud-speed">--</div></div>
+  <div class="hud-stat"><div class="hud-label">Steering</div><div class="hud-value" id="hud-steering">--</div></div>
+  <div class="hud-stat"><div class="hud-label">Turn Signal</div><div class="hud-value" id="hud-turn">--</div></div>
+  <div class="hud-stat"><div class="hud-label">Hazards</div><div class="hud-value" id="hud-hazard">--</div></div>
+  <div class="hud-stat"><div class="hud-label">Override</div><div class="hud-value" id="hud-paddle">--</div></div>
+  <div class="hud-stat"><div class="hud-label">RTK State</div><div class="hud-value" id="hud-rtk">--</div></div>
+  <div class="hud-stat"><div class="hud-label">Satellites</div><div class="hud-value" id="hud-sats">--</div></div>
+</div>
+<div id="vehicle-status-note" style="font-size:11px;color:#666;margin-bottom:8px;">Waiting for connection...</div>
+
+<h3>Position source (for placing points on the map, not shown visually)</h3>
+<div class="row">
+  <select id="gps-topic">
+    <option value="/gps/fix_throttle">/gps/fix_throttle</option>
+    <option value="/vehicle/gps/fix_throttle">/vehicle/gps/fix_throttle</option>
+  </select>
+  <input id="pose-topic" value="/anavs/solution/pose_enu" size="26">
+  <button onclick="subscribePosition()">Subscribe</button>
+</div>
+<div id="position-status" style="font-size:12px;color:#999;margin-bottom:8px;">No position yet.</div>
+
+<div class="viewer-row">
+  <div class="viewer-col">
+    <h3>Point cloud topic (CBOR)</h3>
+    <div class="row">
+      <select id="pc-topic">
+        <option value="/lidars/points_fused_throttle">/lidars/points_fused_throttle</option>
+        <option value="/lidars/points_fused_filtered">/lidars/points_fused_filtered</option>
+      </select>
+      <input id="pc-type" size="28" value="sensor_msgs/msg/PointCloud2">
+      <button onclick="subscribePointCloud()">Subscribe</button>
+    </div>
+    <div id="pc-status" style="font-size:12px;color:#999;margin-bottom:8px;">No messages yet.</div>
+    <div id="map-wrap"></div>
+  </div>
+
+  <div class="viewer-col">
+    <h3>Camera Streams (CBOR CompressedImage)</h3>
+    <div class="row">
+      <button onclick="subscribeCameras()">Subscribe to Cameras</button>
+    </div>
+    <div id="img-status" style="font-size:12px;color:#999;margin-bottom:8px;">Waiting for connection...</div>
+
+    <div class="camera-panel">
+      <div class="main-cam-view">
+        <img id="main-img" src="" alt="Select a stream">
+        <div class="cam-overlay-text" id="main-cam-label">No Camera Selected</div>
+      </div>
+
+      <div class="thumbnail-strip" id="thumbnail-strip"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// get your own token at https://account.mapbox.com/access-tokens/
+mapboxgl.accessToken = '';
+let ros, pcTopic, gpsTopic, poseTopic;
+let pcCount = 0;
+
+
+let rafFrameTimes = [];
+function rafLoop(now) {
+  rafFrameTimes.push(now);
+  const cutoff = now - 1000;
+  while (rafFrameTimes.length && rafFrameTimes[0] < cutoff) rafFrameTimes.shift();
+  requestAnimationFrame(rafLoop);
+}
+requestAnimationFrame(rafLoop);
+
+setInterval(() => {
+  const fpsEl = document.getElementById('render-fps');
+  if (fpsEl) {
+    fpsEl.textContent = rafFrameTimes.length ? `FPS: ${rafFrameTimes.length}` : 'FPS: --';
+  }
+}, 300);
+
+let map = null;
+let overlay = null;
+let marker = null;
+let mapReady = false;
+let mapInitStarted = false;
+let latestGps = null;
+let latestHeading = 0;
+let smoothedCameraBearing = 0;
+
+
+function shortestAngleDiff(fromDeg, toDeg) {
+  return ((toDeg - fromDeg + 540) % 360) - 180;
+}
+
+const MAX_HISTORY = 200;
+const gpsHistory = [];
+const headingHistory = [];
+
+function stampToSeconds(stamp) {
+  if (!stamp) return null;
+  const sec = stamp.sec !== undefined ? stamp.sec : stamp.secs;
+  const nsec = stamp.nanosec !== undefined ? stamp.nanosec : stamp.nsecs;
+  if (sec === undefined || nsec === undefined) return null;
+  return sec + nsec / 1e9;
+}
+
+function pushHistory(arr, entry) {
+  arr.push(entry);
+  if (arr.length > MAX_HISTORY) arr.shift();
+}
+
+function findNearestByTime(arr, t) {
+  if (arr.length === 0 || t === null) return null;
+  let best = arr[0];
+  let bestDiff = Math.abs(arr[0].t - t);
+  for (let i = 1; i < arr.length; i++) {
+    const diff = Math.abs(arr[i].t - t);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = arr[i];
+    }
+  }
+  return best;
+}
+
+
+function rotatePoint(x, y, bearingDeg) {
+  const rad = (bearingDeg * Math.PI) / 180;
+  const east = x * Math.sin(rad) - y * Math.cos(rad);
+  const north = x * Math.cos(rad) + y * Math.sin(rad);
+  return [east, north];
+}
+
+function quaternionToCompassBearing(orientation) {
+  const q = orientation;
+  const sinYawCos = 2 * (q.w * q.z + q.x * q.y);
+  const cosYawCos = 1 - 2 * (q.y * q.y + q.z * q.z);
+  const yawRad = Math.atan2(sinYawCos, cosYawCos);
+  const yawDeg = (yawRad * 180) / Math.PI;
+  return (90 - yawDeg + 360) % 360;
+}
+
+
+const CONTROL_MODE_LABELS = {
+  0: 'No Command', 1: 'Autonomous', 2: 'Auto (Steer)',
+  3: 'Auto (Vel)', 4: 'Manual', 5: 'Disengaged', 6: 'Not Ready',
+};
+const CONTROL_MODE_CLASS = { 1: 'ok', 2: 'ok', 3: 'ok', 4: 'info', 5: 'bad', 6: 'warn' };
+
+
+const GEAR_LABELS = { 0: 'None', 1: 'Neutral', 2: 'Drive', 20: 'Reverse', 22: 'Park' };
+
+const TURN_LABELS = { 1: 'Off', 2: 'Left', 3: 'Right' };
+const HAZARD_LABELS = { 1: 'Off', 2: 'On' };
+
+function setHud(id, text, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'hud-value' + (cls ? ` ${cls}` : '');
+}
+
+let paddleUpActive = false;
+let paddleDownActive = false;
+
+function updatePaddleHud() {
+  if (paddleUpActive && paddleDownActive) setHud('hud-paddle', 'Up + Down', 'warn');
+  else if (paddleUpActive) setHud('hud-paddle', 'Up', 'info');
+  else if (paddleDownActive) setHud('hud-paddle', 'Down', 'info');
+  else setHud('hud-paddle', 'None', null);
+}
+
+function subscribeVehicleStatus() {
+  if (!ros) return;
+
+  const sub = (name, messageType, cb) => {
+    new ROSLIB.Topic({ ros, name, messageType, queue_length: 1 }).subscribe(cb);
+  };
+
+  sub('/vehicle/status/control_mode', 'autoware_auto_vehicle_msgs/msg/ControlModeReport', (msg) => {
+    setHud('hud-control-mode', CONTROL_MODE_LABELS[msg.mode] || `Mode ${msg.mode}`, CONTROL_MODE_CLASS[msg.mode]);
+  });
+
+  sub('/vehicle/status/gear_status', 'autoware_auto_vehicle_msgs/msg/GearReport', (msg) => {
+    setHud('hud-gear', GEAR_LABELS[msg.report] || `Gear #${msg.report}`, null);
+  });
+
+  sub('/vehicle/status/velocity_status', 'autoware_auto_vehicle_msgs/msg/VelocityReport', (msg) => {
+    const kmh = msg.longitudinal_velocity * 3.6;
+    setHud('hud-speed', `${kmh.toFixed(1)} km/h`, null);
+  });
+
+  sub('/vehicle/status/steering_status', 'autoware_auto_vehicle_msgs/msg/SteeringReport', (msg) => {
+    const deg = msg.steering_tire_angle * (180 / Math.PI);
+    setHud('hud-steering', `${deg.toFixed(1)}°`, null);
+  });
+
+  sub('/vehicle/status/turn_indicators_status', 'autoware_auto_vehicle_msgs/msg/TurnIndicatorsReport', (msg) => {
+    const label = TURN_LABELS[msg.report] || `#${msg.report}`;
+    setHud('hud-turn', label, label === 'Off' ? null : 'info');
+  });
+
+  sub('/vehicle/status/hazard_lights_status', 'autoware_auto_vehicle_msgs/msg/HazardLightsReport', (msg) => {
+    const label = HAZARD_LABELS[msg.report] || `#${msg.report}`;
+    setHud('hud-hazard', label, label === 'On' ? 'warn' : null);
+  });
+
+  sub('/vehicle/paddle_up_engage', 'std_msgs/msg/Bool', (msg) => {
+    paddleUpActive = msg.data;
+    updatePaddleHud();
+  });
+  sub('/vehicle/paddle_down_engage', 'std_msgs/msg/Bool', (msg) => {
+    paddleDownActive = msg.data;
+    updatePaddleHud();
+  });
+
+  sub('/anavs/solution/rtk_state', 'std_msgs/msg/UInt8', (msg) => {
+    setHud('hud-rtk', `Code ${msg.data}`, null);
+  });
+
+  sub('/anavs/solution/num_sats', 'std_msgs/msg/UInt8', (msg) => {
+    const cls = msg.data >= 8 ? 'ok' : msg.data >= 4 ? 'warn' : 'bad';
+    setHud('hud-sats', `${msg.data}`, cls);
+  });
+
+  document.getElementById('vehicle-status-note').textContent = 'Subscribed - waiting for first messages...';
+}
+
+function connect() {
+  const host = document.getElementById('host').value;
+  const port = document.getElementById('port').value;
+  ros = new ROSLIB.Ros({ url: `ws://${host}:${port}` });
+
+  ros.on('connection', () => {
+    document.getElementById('status').textContent = `Connected to ws://${host}:${port}`;
+    subscribeVehicleStatus();
+  });
+  ros.on('error', (err) => {
+    document.getElementById('status').textContent = `Error: ${err}`;
+  });
+  ros.on('close', () => {
+    document.getElementById('status').textContent = 'Connection closed.';
+  });
+}
+
+function computePercentileBounds(intensities, numPoints, lowPct, highPct) {
+  const maxSamples = 2000;
+  let sample;
+  if (numPoints <= maxSamples) {
+    sample = Array.from(intensities.slice(0, numPoints));
+  } else {
+    sample = new Array(maxSamples);
+    for (let i = 0; i < maxSamples; i++) {
+      sample[i] = intensities[Math.floor(Math.random() * numPoints)];
+    }
+  }
+  sample.sort((a, b) => a - b);
+
+  const n = sample.length;
+  const lowIdx = Math.max(0, Math.min(n - 1, Math.floor((n * lowPct) / 100)));
+  const highIdx = Math.max(0, Math.min(n - 1, Math.floor((n * highPct) / 100)));
+  return [sample[lowIdx], sample[highIdx]];
+}
+
+function intensityToColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const stops = [
+    [0.0, [30, 90, 240]],
+    [0.33, [150, 30, 220]],
+    [0.66, [235, 20, 150]],
+    [1.0, [255, 60, 20]],
+  ];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [t0, c0] = stops[i];
+    const [t1, c1] = stops[i + 1];
+    if (t >= t0 && t <= t1) {
+      const localT = (t - t0) / (t1 - t0);
+      return [
+        Math.round(c0[0] + (c1[0] - c0[0]) * localT),
+        Math.round(c0[1] + (c1[1] - c0[1]) * localT),
+        Math.round(c0[2] + (c1[2] - c0[2]) * localT),
+      ];
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+function parseAndTransformPointCloud2(msg, headingDeg) {
+  let uint8;
+  if (typeof msg.data === 'string') {
+    const bin = atob(msg.data);
+    uint8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) uint8[i] = bin.charCodeAt(i);
+  } else if (msg.data instanceof Uint8Array) {
+    uint8 = msg.data;
+  } else {
+    uint8 = new Uint8Array(msg.data);
+  }
+
+  const view = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
+  const numPoints = msg.width * msg.height;
+  const xOff = msg.fields.find(f => f.name === 'x').offset;
+  const yOff = msg.fields.find(f => f.name === 'y').offset;
+  const zOff = msg.fields.find(f => f.name === 'z').offset;
+  const iField = msg.fields.find(f => f.name === 'intensity');
+  const iOff = iField ? iField.offset : null;
+  const littleEndian = !msg.is_bigendian;
+
+  const rad = (headingDeg * Math.PI) / 180;
+  const sinR = Math.sin(rad);
+  const cosR = Math.cos(rad);
+
+  const positions = new Float32Array(numPoints * 3);
+  const intensities = iOff !== null ? new Float32Array(numPoints) : null;
+
+  const pointStep = msg.point_step;
+  for (let i = 0; i < numPoints; i++) {
+    const base = i * pointStep;
+    const x = view.getFloat32(base + xOff, littleEndian);
+    const y = view.getFloat32(base + yOff, littleEndian);
+
+    const idx3 = i * 3;
+    positions[idx3] = x * sinR - y * cosR;
+    positions[idx3 + 1] = x * cosR + y * sinR;
+    positions[idx3 + 2] = view.getFloat32(base + zOff, littleEndian);
+
+    if (intensities) intensities[i] = view.getFloat32(base + iOff, littleEndian);
+  }
+
+  let colors = null;
+  if (intensities) {
+    const [iLow, iHigh] = computePercentileBounds(intensities, numPoints, 2, 98);
+    const range = iHigh - iLow || 1;
+    colors = new Uint8Array(numPoints * 3);
+    for (let i = 0; i < numPoints; i++) {
+      const [r, g, b] = intensityToColor((intensities[i] - iLow) / range);
+      colors[i * 3] = r;
+      colors[i * 3 + 1] = g;
+      colors[i * 3 + 2] = b;
+    }
+  }
+
+  return { positions, colors, numPoints };
+}
+
+function initMap(centerLat, centerLon, bearing) {
+  map = new mapboxgl.Map({
+    container: 'map-wrap',
+    style: 'mapbox://styles/mapbox/standard',
+    center: [centerLon, centerLat],
+    zoom: 18,
+    pitch: 45,
+    bearing: bearing || 0,
+  });
+
+  map.on('load', () => {
+    map.setConfigProperty('basemap', 'lightPreset', 'day');
+    overlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
+    map.addControl(overlay);
+    marker = new mapboxgl.Marker({ color: '#00ff00' })
+      .setLngLat([centerLon, centerLat])
+      .addTo(map);
+    mapReady = true;
+  });
+}
+
+function subscribePosition() {
+  if (!ros) { alert('Connect first.'); return; }
+  const gpsName = document.getElementById('gps-topic').value;
+  const poseName = document.getElementById('pose-topic').value;
+
+  if (gpsTopic) {
+    gpsTopic.unsubscribe();
+    gpsTopic = null;
+  }
+  if (poseTopic) {
+    poseTopic.unsubscribe();
+    poseTopic = null;
+  }
+
+  gpsTopic = new ROSLIB.Topic({
+    ros,
+    name: gpsName,
+    messageType: 'sensor_msgs/msg/NavSatFix',
+    compression: 'cbor',
+    throttle_rate: 150,
+    queue_length: 1,
+  });
+let lastMapEaseAt = 0;
+const MIN_MAP_EASE_INTERVAL_MS = 150;
+
+  gpsTopic.subscribe((msg) => {
+    latestGps = { latitude: msg.latitude, longitude: msg.longitude };
+    pushHistory(gpsHistory, {
+      t: stampToSeconds(msg.header && msg.header.stamp),
+      latitude: msg.latitude,
+      longitude: msg.longitude,
+    });
+    document.getElementById('position-status').textContent =
+      `lat ${msg.latitude.toFixed(6)}, lon ${msg.longitude.toFixed(6)}, heading ${latestHeading.toFixed(1)}`;
+    if (!mapInitStarted) {
+      mapInitStarted = true;
+      smoothedCameraBearing = latestHeading;
+      initMap(msg.latitude, msg.longitude, smoothedCameraBearing);
+    } else if (mapReady) {
+      const now = performance.now();
+      if (now - lastMapEaseAt >= MIN_MAP_EASE_INTERVAL_MS) {
+        lastMapEaseAt = now;
+        const diff = shortestAngleDiff(smoothedCameraBearing, latestHeading);
+        smoothedCameraBearing = (smoothedCameraBearing + diff * 0.15 + 360) % 360;
+        map.easeTo({ center: [msg.longitude, msg.latitude], bearing: smoothedCameraBearing, duration: MIN_MAP_EASE_INTERVAL_MS });
+        if (marker) marker.setLngLat([msg.longitude, msg.latitude]);
+      }
+    }
+  });
+
+  poseTopic = new ROSLIB.Topic({
+    ros,
+    name: poseName,
+    messageType: 'geometry_msgs/msg/PoseWithCovarianceStamped',
+    compression: 'cbor',
+    throttle_rate: 150,
+    queue_length: 1,
+  });
+  poseTopic.subscribe((msg) => {
+    latestHeading = quaternionToCompassBearing(msg.pose.pose.orientation);
+    pushHistory(headingHistory, {
+      t: stampToSeconds(msg.header && msg.header.stamp),
+      heading: latestHeading,
+    });
+  });
+}
+
+
+const MIN_UPDATE_INTERVAL_MS = 100;
+let lastProcessedAt = 0;
+
+let cachedPointCloudLayer = null;
+
+function subscribePointCloud() {
+  if (!ros) { alert('Connect first.'); return; }
+  const name = document.getElementById('pc-topic').value;
+  const type = document.getElementById('pc-type').value;
+
+  if (pcTopic) {
+    pcTopic.unsubscribe();
+    pcTopic = null;
+  }
+
+  pcTopic = new ROSLIB.Topic({
+    ros,
+    name,
+    messageType: type,
+    compression: 'cbor',
+    throttle_rate: 200,
+    queue_length: 1,
+  });
+
+  pcTopic.subscribe((msg) => {
+    pcCount++;
+    document.getElementById('pc-status').textContent = `Received message #${pcCount} on ${name}`;
+
+    if (!mapReady || !latestGps) return;
+
+    const now = performance.now();
+    if (now - lastProcessedAt < MIN_UPDATE_INTERVAL_MS) return;
+    lastProcessedAt = now;
+
+    const { positions, colors, numPoints } = parseAndTransformPointCloud2(msg, smoothedCameraBearing);
+
+    const attributes = { getPosition: { value: positions, size: 3 } };
+    if (colors) attributes.getColor = { value: colors, size: 3 };
+
+    if (cachedPointCloudLayer) {
+      cachedPointCloudLayer = cachedPointCloudLayer.clone({
+        data: { length: numPoints, attributes },
+        coordinateOrigin: [latestGps.longitude, latestGps.latitude],
+        getColor: colors ? undefined : [80, 200, 255],
+      });
+    } else {
+      cachedPointCloudLayer = new deck.PointCloudLayer({
+        id: 'point-cloud-layer',
+        data: { length: numPoints, attributes },
+        coordinateSystem: deck.COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateOrigin: [latestGps.longitude, latestGps.latitude],
+        getColor: colors ? undefined : [80, 200, 255],
+        pointSize: 0.08,
+        sizeUnits: 'meters',
+      });
+    }
+
+    overlay.setProps({ layers: [cachedPointCloudLayer] });
+  });
+}
+
+const cameras = [
+  { id: 'front_wide',  name: 'Front Wide',  topic: '/camera_front_wide/image/compressed_relay' },
+  { id: 'front_left',  name: 'Front Left',  topic: '/camera_front_left/image/compressed_relay' },
+  { id: 'front_right', name: 'Front Right', topic: '/camera_front_right/image/compressed_relay' },
+  { id: 'back',        name: 'Back',        topic: '/camera_back/image/compressed_relay' },
+  { id: 'back_left',   name: 'Back Left',   topic: '/camera_back_left/image/compressed_relay' },
+  { id: 'back_right',  name: 'Back Right',  topic: '/camera_back_right/image/compressed_relay' },
+];
+
+let activeCamId = cameras[0].id;
+let activeCamTopic = null;  
+const camUrls = {};         
+const feedbackTopics = {};   
+let decodeTimesMs = [];
+let feedbackIntervalStarted = false;
+
+function initCameraUI() {
+  const strip = document.getElementById('thumbnail-strip');
+  strip.innerHTML = '';
+
+  cameras.forEach(cam => {
+    const box = document.createElement('div');
+    box.className = `thumbnail-box ${cam.id === activeCamId ? 'active' : ''}`;
+    box.id = `thumb-box-${cam.id}`;
+    box.onclick = () => selectCamera(cam.id);
+
+    const img = document.createElement('img');
+    img.id = `thumb-img-${cam.id}`;
+    img.src = '';
+
+    const label = document.createElement('div');
+    label.className = 'thumbnail-label';
+    label.innerText = cam.name;
+
+    box.appendChild(img);
+    box.appendChild(label);
+    strip.appendChild(box);
+  });
+
+  updateMainCameraLabel();
+}
+initCameraUI();
+
+function selectCamera(id) {
+  if (id === activeCamId && activeCamTopic) return;
+  activeCamId = id;
+
+  cameras.forEach(cam => {
+    const box = document.getElementById(`thumb-box-${cam.id}`);
+    if (box) box.classList.toggle('active', cam.id === activeCamId);
+  });
+
+  updateMainCameraLabel();
+
+  document.getElementById('main-img').src = camUrls[activeCamId] || '';
+
+  decodeTimesMs = [];
+
+  if (ros) subscribeActiveCamera();
+}
+
+function updateMainCameraLabel() {
+  const activeCam = cameras.find(c => c.id === activeCamId);
+  if (activeCam) document.getElementById('main-cam-label').innerText = activeCam.name;
+}
+
+function getFeedbackTopicFor(camId) {
+  if (!feedbackTopics[camId]) {
+    feedbackTopics[camId] = new ROSLIB.Topic({
+      ros,
+      name: `/frontend/perf_feedback/${camId}`,
+      messageType: 'std_msgs/msg/Float32',
+    });
+  }
+  return feedbackTopics[camId];
+}
+
+function subscribeActiveCamera() {
+  if (activeCamTopic) {
+    activeCamTopic.unsubscribe();
+    activeCamTopic = null;
+  }
+
+  const cam = cameras.find(c => c.id === activeCamId);
+  if (!cam) return;
+
+  activeCamTopic = new ROSLIB.Topic({
+    ros,
+    name: cam.topic,
+    messageType: 'sensor_msgs/msg/CompressedImage',
+    compression: 'cbor',
+    throttle_rate: 150,
+    queue_length: 1,
+  });
+
+  activeCamTopic.subscribe((msg) => {
+    const decodeStartedAt = performance.now();
+    let imageUrl;
+
+    if (typeof msg.data === 'string') {
+      imageUrl = `data:image/jpeg;base64,${msg.data}`;
+    } else {
+      const rawBytes = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
+      const blob = new Blob([rawBytes], { type: 'image/jpeg' });
+      imageUrl = URL.createObjectURL(blob);
+    }
+
+    if (camUrls[cam.id] && camUrls[cam.id].startsWith('blob:')) {
+      URL.revokeObjectURL(camUrls[cam.id]);
+    }
+    camUrls[cam.id] = imageUrl;
+
+    const thumbImg = document.getElementById(`thumb-img-${cam.id}`);
+    if (thumbImg) thumbImg.src = imageUrl;
+
+    const mainImg = document.getElementById('main-img');
+    mainImg.onload = () => {
+      const elapsedMs = performance.now() - decodeStartedAt;
+      decodeTimesMs.push(elapsedMs);
+      if (decodeTimesMs.length > 30) decodeTimesMs.shift();
+    };
+    mainImg.src = imageUrl;
+
+    document.getElementById('img-status').textContent =
+      `Viewing: ${cam.name} (${msg.format})`;
+  });
+}
+
+function subscribeCameras() {
+  if (!ros) { alert('Connect first.'); return; }
+
+  document.getElementById('img-status').textContent = `Connecting to ${cameras.find(c => c.id === activeCamId).name}...`;
+  subscribeActiveCamera();
+
+  if (!feedbackIntervalStarted) {
+    feedbackIntervalStarted = true;
+    setInterval(() => {
+      if (decodeTimesMs.length === 0) return;
+      const avgDecodeTimeMs = decodeTimesMs.reduce((a, b) => a + b, 0) / decodeTimesMs.length;
+      getFeedbackTopicFor(activeCamId).publish(new ROSLIB.Message({ data: 1000 / avgDecodeTimeMs }));
+    }, 1500);
+  }
+}
+
+</script>
+
+</body>
+</html>
