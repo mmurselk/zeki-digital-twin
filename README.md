@@ -71,9 +71,29 @@ source install/setup.bash
 
 # 3. Play the bag
 ros2 bag play /bags/rosbag2_2024_03_19-15_18_39
+
+### 5. Run the camera and point cloud relay nodes
+
+The web viewer subscribes to the throttled/filtered topics published by the relay nodes (`*_relay`, `*_filtered`), not the raw high-rate topics. Open two more bash sessions inside the container (one per node) and run:
+
+```bash
+docker compose exec bridge_pipeline bash
+source install/setup.bash
+ros2 run bridge_pipeline multicamera_relay
 ```
 
-### 5. Open the web viewer
+```bash
+docker compose exec bridge_pipeline bash
+source install/setup.bash
+ros2 run bridge_pipeline point_cloud_filter_node
+```
+
+> Executable names above assume they're registered as `console_scripts` entry points matching the script filenames. Check `src/bridge_pipeline/setup.py` if `ros2 run` fails with "No executable found".
+
+Leave both running alongside the bag playback from step 4 — the web viewer won't have data on the relay/filtered topics without them.
+```
+
+### 6. Open the web viewer
 
 In a third terminal, on the host machine:
 
