@@ -63,14 +63,15 @@ In a second terminal, open another bash session inside the container. Before pla
 ```bash
 docker compose exec bridge_pipeline bash
 
-# 1. Build ONLY the required message packages
+# Build ONLY the required message packages
 colcon build --packages-up-to autoware_auto_vehicle_msgs tier4_vehicle_msgs
 
-# 2. Source the newly built workspace
+# Source the newly built workspace
 source install/setup.bash
 
-# 3. Play the bag
+# Play the bag
 ros2 bag play /bags/rosbag2_2024_03_19-15_18_39
+```
 
 ### 5. Run the camera and point cloud relay nodes
 
