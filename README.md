@@ -92,7 +92,7 @@ ros2 run bridge_pipeline point_cloud_filter_node
 > Executable names above assume they're registered as `console_scripts` entry points matching the script filenames. Check `src/bridge_pipeline/setup.py` if `ros2 run` fails with "No executable found".
 
 Leave both running alongside the bag playback from step 4 — the web viewer won't have data on the relay/filtered topics without them.
-```
+
 
 ### 6. Open the web viewer
 
