@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>rosbridge pipeline test</title>
+<script src="https://unpkg.com/roslib@1/build/roslib.min.js"></script>
+<script src="https://unpkg.com/deck.gl@8.9.0/dist.min.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14171b;
+    --panel-2: #1b1f24;
+    --border: #262b31;
+    --text: #e8eaed;
+    --muted: #8b939c;
+    --accent: #3ddc97;
+    --accent-dim: #235c43;
+    --danger: #e0616b;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    grid-template-rows: 52px 1fr;
+    grid-template-areas: "top top" "nav main";
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ---- top bar: connection, always visible ---- */
+  .topbar {
+    grid-area: top;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar .brand { font-weight: 600; font-size: 13px; letter-spacing: 0.2px; margin-right: 6px; white-space: nowrap; }
+  .topbar input {
+    width: 96px; font-family: var(--mono); font-size: 12px;
+  }
+  .topbar input#port { width: 56px; }
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; transition: background 0.2s; }
+  .conn-dot.on { background: var(--accent); }
+  #status { font-size: 12px; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---- sidebar nav ---- */
+  .sidebar {
+    grid-area: nav;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 10px 0;
+    overflow-y: auto;
+  }
+  .navbtn {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    background: transparent; border: none; color: var(--muted);
+    font-size: 13px; text-align: left; cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .navbtn:hover { color: var(--text); background: var(--panel-2); }
+  .navbtn.active { color: var(--text); background: var(--panel-2); border-left-color: var(--accent); }
+  .navbtn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+  .navbtn .dot.live { background: var(--accent); }
+
+  /* ---- main content ---- */
+  main.content { grid-area: main; overflow: hidden; position: relative; }
+  .panel {
+    display: none;
+    flex-direction: column;
+    height: 100%;
+    padding: 16px 20px;
+    overflow-y: auto;
+  }
+  .panel.active { display: flex; }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+  .panel h3 { font-size: 12px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+
+  .row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+  input, select {
+    padding: 6px 8px; border-radius: 5px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); font-size: 12.5px;
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  button {
+    padding: 6px 12px; border-radius: 5px; border: 1px solid transparent;
+    background: var(--accent-dim); color: var(--accent); cursor: pointer; font-size: 12.5px; font-weight: 600;
+  }
+  button:hover { filter: brightness(1.2); }
+  button.secondary { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+  .hint { font-size: 11px; color: var(--muted); margin: -2px 0 8px; }
+  .status-line { font-size: 12px; color: var(--muted); margin-bottom: 10px; font-family: var(--mono); }
+
+  details.settings { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 12px; background: var(--panel-2); }
+  details.settings summary { padding: 8px 12px; cursor: pointer; font-size: 12px; color: var(--muted); font-weight: 600; list-style: none; }
+  details.settings summary::-webkit-details-marker { display: none; }
+  details.settings summary:before { content: "▸ "; }
+  details.settings[open] summary:before { content: "▾ "; }
+  details.settings .row { padding: 0 12px 10px; margin: 0; }
+
+  label.field-label { width: 120px; font-size: 12px; color: var(--muted); flex-shrink: 0; }
+
+  #mapbox-wrap { flex: 1; min-height: 560px; width: 100%; border-radius: 8px; overflow: hidden; }
+
+  #img-preview { max-width: 420px; border-radius: 8px; margin-top: 12px; display: block; }
+  #stitched-preview { max-width: 100%; border-radius: 8px; margin-top: 12px; display: block; border: 1px solid var(--border); }
+
+  #grid-wrap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; flex: 1; min-height: 0; }
+  .grid-cell { position: relative; background: #000; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+  .grid-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .grid-cell .label { position: absolute; top: 4px; left: 6px; font-size: 11px; color: #ddd; background: rgba(0,0,0,0.55); padding: 2px 6px; border-radius: 4px; }
+  .grid-cell .fps { position: absolute; top: 4px; right: 6px; font-size: 11px; color: var(--accent); background: rgba(0,0,0,0.55); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); }
+
+  .veh-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .veh-cell { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+  .veh-cell .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .veh-cell .val { font-size: 15px; font-family: var(--mono); }
+
+  .topic-config { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .topic-config .row { gap: 6px; }
+
+  /* ---- panorama tab ---- */
+  #pano-canvas-wrap { background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+  #pano-canvas { display: block; width: 100%; height: auto; }
+  .pano-slots { display: flex; flex-direction: column; gap: 6px; }
+  .pano-slot-row {
+    display: grid;
+    grid-template-columns: 90px 130px 1fr 1fr 1fr 90px;
+    gap: 10px; align-items: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px;
+  }
+  .pano-slot-row .slot-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .pano-slot-row .slider-field { display: flex; flex-direction: column; gap: 2px; }
+  .pano-slot-row .slider-field span { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+  .pano-slot-row input[type="range"] { width: 100%; }
+  .pano-global-row { display: flex; gap: 18px; align-items: center; margin-bottom: 10px; }
+  .pano-global-row .slider-field { display: flex; flex-direction: column; gap: 2px; width: 160px; }
+  .pano-global-row .slider-field span { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="brand">rosbridge pipeline</span>
+  <span class="conn-dot" id="conn-dot"></span>
+  <input id="host" placeholder="host" value="127.0.0.1">
+  <input id="port" placeholder="port" value="9090">
+  <button onclick="connect()">Connect</button>
+  <span id="status">Not connected.</span>
+</div>
+
+<nav class="sidebar">
+  <button class="navbtn active" data-tab="tab-pointcloud" onclick="showTab('tab-pointcloud', this)"><span class="dot"></span>Point cloud</button>
+  <button class="navbtn" data-tab="tab-vehicle" onclick="showTab('tab-vehicle', this)"><span class="dot"></span>Vehicle info</button>
+  <button class="navbtn" data-tab="tab-gridcam" onclick="showTab('tab-gridcam', this)"><span class="dot"></span>Camera grid</button>
+  <button class="navbtn" data-tab="tab-panorama" onclick="showTab('tab-panorama', this)"><span class="dot"></span>Panorama (live)</button>
+  <button class="navbtn" data-tab="tab-surround" onclick="showTab('tab-surround', this)"><span class="dot"></span>Surround view</button>
+  <button class="navbtn" data-tab="tab-single" onclick="showTab('tab-single', this)"><span class="dot"></span>Single camera</button>
+</nav>
+
+<main class="content">
+
+  <!-- Point cloud -->
+  <section id="tab-pointcloud" class="panel active">
+    <h2>Point cloud</h2>
+
+    <details class="settings">
+      <summary>Quality &amp; framerate</summary>
+      <div class="row">
+        <input id="pc-node-name" value="/point_cloud_filter_node" size="22" title="Filter node name">
+        <select id="pc-quality">
+          <option value="0.3">Quality: Coarse (fast)</option>
+          <option value="0.1" selected>Quality: Medium</option>
+          <option value="0.05">Quality: Fine (dense)</option>
+        </select>
+        <select id="pc-rate">
+          <option value="0" selected>Rate: unlimited</option>
+          <option value="1">Rate: 1 Hz</option>
+          <option value="3">Rate: 3 Hz</option>
+          <option value="5">Rate: 5 Hz</option>
+        </select>
+        <button onclick="applyPointCloudSettings()">Apply</button>
+      </div>
+      <div id="pc-settings-status" class="status-line" style="padding-left:12px;">No changes applied yet.</div>
+    </details>
+
+    <div class="row">
+      <input id="pc-topic" placeholder="/lidar/points" size="22" list="dl-pointcloud">
+      <input id="pc-type" placeholder="sensor_msgs/msg/PointCloud2" size="26" value="sensor_msgs/msg/PointCloud2">
+      <button onclick="subscribePointCloud()">Subscribe</button>
+    </div>
+    <datalist id="dl-pointcloud">
+      <option value="/lidars/points_fused_throttle">
+      <option value="/lidars/points_fused_filtered">
+      <option value="/lidar/points">
+    </datalist>
+    <div id="pc-status" class="status-line">No messages yet.</div>
+
+    <details class="settings">
+      <summary>Map (Mapbox)</summary>
+      <div class="row">
+        <input id="mapbox-token" placeholder="pk.eyJ1Ijoi..." size="46" value="pk.eyJ1IjoiZWxpZnN1ZGV5IiwiYSI6ImNtcjNhY2ZlbDAzNnAzMnF3bHgyand3dDUifQ.KXhZIdPcB5jMTrn8zXL-dQ">
+      </div>
+      <div class="row">
+        <label class="field-label" style="width:70px;">GPS topic</label>
+        <input id="gps-topic" value="/gps/fix_throttle" size="28" list="dl-gps">
+        <datalist id="dl-gps">
+          <option value="/gps/fix_throttle">
+          <option value="/anavs/solution/pos_llh">
+        </datalist>
+        <label class="field-label" style="width:70px;">Pose topic</label>
+        <input id="pose-topic" value="/anavs/solution/pose_enu" size="30">
+        <button onclick="subscribeGpsPose()">Subscribe GPS/Pose</button>
+      </div>
+      <div id="gps-pose-status" class="status-line" style="padding-left:12px;">No GPS/pose yet. Subscribe GPS/Pose first, then Subscribe the point cloud above -- the map appears as soon as both have a fix.</div>
+    </details>
+
+    <div id="mapbox-wrap"></div>
+  </section>
+
+  <!-- Vehicle info -->
+  <section id="tab-vehicle" class="panel">
+    <h2>Vehicle information</h2>
+    <div class="topic-config">
+      <div class="row"><label class="field-label">velocity</label><input id="veh-topic-velocity" value="/vehicle/status/velocity_status" size="38"></div>
+      <div class="row"><label class="field-label">steering</label><input id="veh-topic-steering" value="/vehicle/status/steering_status" size="38"></div>
+      <div class="row"><label class="field-label">gear</label><input id="veh-topic-gear" value="/vehicle/status/gear_status" size="38"></div>
+      <div class="row"><label class="field-label">control_mode</label><input id="veh-topic-control_mode" value="/vehicle/status/control_mode" size="38"></div>
+      <div class="row"><label class="field-label">turn_indicators</label><input id="veh-topic-turn_indicators" value="/vehicle/status/turn_indicators_status" size="38"></div>
+      <div class="row"><label class="field-label">hazard_lights</label><input id="veh-topic-hazard_lights" value="/vehicle/status/hazard_lights_status" size="38"></div>
+    </div>
+    <div class="row">
+      <button onclick="subscribeVehicleInfo()">Subscribe all</button>
+    </div>
+    <div class="veh-grid" id="vehicle-panel">
+      <div class="veh-cell"><div class="label">velocity</div><div class="val" id="veh-val-velocity">--</div></div>
+      <div class="veh-cell"><div class="label">steering</div><div class="val" id="veh-val-steering">--</div></div>
+      <div class="veh-cell"><div class="label">gear</div><div class="val" id="veh-val-gear">--</div></div>
+      <div class="veh-cell"><div class="label">control mode</div><div class="val" id="veh-val-control_mode">--</div></div>
+      <div class="veh-cell"><div class="label">turn indicators</div><div class="val" id="veh-val-turn_indicators">--</div></div>
+      <div class="veh-cell"><div class="label">hazard lights</div><div class="val" id="veh-val-hazard_lights">--</div></div>
+    </div>
+  </section>
+
+  <!-- Camera grid -->
+  <section id="tab-gridcam" class="panel">
+    <h2>Camera grid <span class="hint" style="display:inline;">(physical layout, not stitched)</span></h2>
+
+    <details class="settings">
+      <summary>Topics &amp; quality</summary>
+      <div class="topic-config" style="padding:0 12px;">
+        <div class="row"><label class="field-label">front_left</label><input id="grid-topic-front_left" value="/camera_front_left/image/compressed_relay" size="38" list="dl-cam-front_left"></div>
+        <div class="row"><label class="field-label">front_wide</label><input id="grid-topic-front_wide" value="/camera_front_wide/image/compressed_relay" size="38" list="dl-cam-front_wide"></div>
+        <div class="row"><label class="field-label">front_right</label><input id="grid-topic-front_right" value="/camera_front_right/image/compressed_relay" size="38" list="dl-cam-front_right"></div>
+        <div class="row"><label class="field-label">back_left</label><input id="grid-topic-back_left" value="/camera_back_left/image/compressed_relay" size="38" list="dl-cam-back_left"></div>
+        <div class="row"><label class="field-label">back</label><input id="grid-topic-back" value="/camera_back/image/compressed_relay" size="38" list="dl-cam-back"></div>
+        <div class="row"><label class="field-label">back_right</label><input id="grid-topic-back_right" value="/camera_back_right/image/compressed_relay" size="38" list="dl-cam-back_right"></div>
+      </div>
+      <datalist id="dl-cam-front_left"><option value="/camera_front_left/image/compressed"><option value="/camera_front_left/image/compressed_relay"></datalist>
+      <datalist id="dl-cam-front_wide"><option value="/camera_front_wide/image/compressed"><option value="/camera_front_wide/image/compressed_relay"></datalist>
+      <datalist id="dl-cam-front_right"><option value="/camera_front_right/image/compressed"><option value="/camera_front_right/image/compressed_relay"></datalist>
+      <datalist id="dl-cam-back_left"><option value="/camera_back_left/image/compressed"><option value="/camera_back_left/image/compressed_relay"></datalist>
+      <datalist id="dl-cam-back"><option value="/camera_back/image/compressed"><option value="/camera_back/image/compressed_relay"></datalist>
+      <datalist id="dl-cam-back_right"><option value="/camera_back_right/image/compressed"><option value="/camera_back_right/image/compressed_relay"></datalist>
+      <div class="row" style="padding:0 12px 10px;">
+        <input id="cam-node-name" value="/camera_relay_node" size="18" title="Relay node name">
+        <input id="cam-target" list="cam-name-list" value="__all__" size="12" title="Camera name, or __all__">
+        <datalist id="cam-name-list">
+          <option value="__all__">All cameras</option>
+          <option value="front_left">front_left</option>
+          <option value="front_wide">front_wide</option>
+          <option value="front_right">front_right</option>
+          <option value="back_left">back_left</option>
+          <option value="back">back</option>
+          <option value="back_right">back_right</option>
+        </datalist>
+        <select id="cam-quality">
+          <option value="30">Quality: Low</option>
+          <option value="60" selected>Quality: Medium</option>
+          <option value="85">Quality: High</option>
+        </select>
+        <select id="cam-rate">
+          <option value="1">Rate: 1 fps</option>
+          <option value="3" selected>Rate: 3 fps</option>
+          <option value="5">Rate: 5 fps</option>
+          <option value="8">Rate: 8 fps</option>
+        </select>
+        <button onclick="applyCameraSettings()">Apply</button>
+        <button class="secondary" onclick="applyCameraSettings(true)">Back to auto rate</button>
+      </div>
+      <div id="cam-settings-status" class="status-line" style="padding-left:12px;">No changes applied yet.</div>
+    </details>
+
+    <div class="row">
+      <button onclick="connectAllGridCameras()">Subscribe all 6</button>
+    </div>
+    <div id="grid-wrap">
+      <div class="grid-cell"><span class="label">front_left</span><span class="fps" id="fps-front_left">--</span><img id="grid-front_left"></div>
+      <div class="grid-cell"><span class="label">front_wide</span><span class="fps" id="fps-front_wide">--</span><img id="grid-front_wide"></div>
+      <div class="grid-cell"><span class="label">front_right</span><span class="fps" id="fps-front_right">--</span><img id="grid-front_right"></div>
+      <div class="grid-cell"><span class="label">back_left</span><span class="fps" id="fps-back_left">--</span><img id="grid-back_left"></div>
+      <div class="grid-cell"><span class="label">back</span><span class="fps" id="fps-back">--</span><img id="grid-back"></div>
+      <div class="grid-cell"><span class="label">back_right</span><span class="fps" id="fps-back_right">--</span><img id="grid-back_right"></div>
+    </div>
+  </section>
+
+  <!-- Panorama (live, browser-side stitching from 6 raw feeds) -->
+  <section id="tab-panorama" class="panel">
+    <h2>Panorama <span class="hint" style="display:inline;">(6 cameras, live, stitched in the browser)</span></h2>
+    <div class="hint">No calibration data available for most cameras, so alignment is done by eye: nudge each camera's horizontal/vertical position and width so it overlaps correctly with its neighbors, and use Feather to blend the overlap region smoothly. If the picture is cut off vertically, switch Fit to "Contain" so the full frame is always shown (may add letterbox bars). <code>front_wide</code> has real lens calibration (camera matrix + distortion coefficients, same as <code>test_merge.py</code>) so its "Undistort" checkbox actually removes lens distortion before compositing -- straighter lines there make its overlap with neighbors line up more smoothly. First go to the "Camera grid" tab and click "Subscribe all 6" to start the feeds.</div>
+
+    <div class="row">
+      <button onclick="startPanorama()">Start panorama</button>
+      <button class="secondary" onclick="stopPanorama()">Stop</button>
+    </div>
+
+    <div id="pano-canvas-wrap">
+      <canvas id="pano-canvas" width="1600" height="280"></canvas>
+    </div>
+
+    <details class="settings" open>
+      <summary>Alignment settings</summary>
+      <div style="padding: 4px 12px 12px;">
+        <div class="pano-global-row">
+          <div class="slider-field">
+            <span>Feather (blend width): <span id="pano-feather-val">40</span>px</span>
+            <input type="range" id="pano-feather" min="0" max="150" value="40" oninput="document.getElementById('pano-feather-val').textContent=this.value">
+          </div>
+          <div class="slider-field">
+            <span>Canvas height: <span id="pano-height-val">280</span>px</span>
+            <input type="range" id="pano-height" min="150" max="600" value="280" oninput="document.getElementById('pano-height-val').textContent=this.value; resizePanoCanvas(this.value);">
+          </div>
+          <div class="slider-field">
+            <span>Fit mode</span>
+            <select id="pano-fit-mode">
+              <option value="cover" selected>Cover (fills slot, may crop)</option>
+              <option value="contain">Contain (never crops, may letterbox)</option>
+            </select>
+          </div>
+        </div>
+        <div class="pano-slots" id="pano-slots"></div>
+      </div>
+    </details>
+  </section>
+
+  <!-- Surround view -->
+  <section id="tab-surround" class="panel">
+    <h2>Surround view <span class="hint" style="display:inline;">(stitched panorama)</span></h2>
+    <div class="row">
+      <input id="stitched-topic" placeholder="/cameras/surround_stitched" size="30" value="/cameras/surround_stitched" list="dl-stitched">
+      <button onclick="subscribeStitched()">Subscribe</button>
+    </div>
+    <datalist id="dl-stitched">
+      <option value="/cameras/surround_stitched">
+      <option value="/camera/surround_view/compressed">
+    </datalist>
+    <div id="stitched-status" class="status-line">No frames yet.</div>
+    <img id="stitched-preview">
+  </section>
+
+  <!-- Single camera -->
+  <section id="tab-single" class="panel">
+    <h2>Camera topic <span class="hint" style="display:inline;">(CompressedImage)</span></h2>
+    <div class="row">
+      <input id="img-topic" placeholder="/camera/front/compressed" size="24" list="dl-any-camera">
+      <button onclick="subscribeImage()">Subscribe</button>
+    </div>
+    <datalist id="dl-any-camera">
+      <option value="/camera_front_left/image/compressed">
+      <option value="/camera_front_left/image/compressed_relay">
+      <option value="/camera_front_wide/image/compressed">
+      <option value="/camera_front_wide/image/compressed_relay">
+      <option value="/camera_front_right/image/compressed">
+      <option value="/camera_front_right/image/compressed_relay">
+      <option value="/camera_back_left/image/compressed">
+      <option value="/camera_back_left/image/compressed_relay">
+      <option value="/camera_back/image/compressed">
+      <option value="/camera_back/image/compressed_relay">
+      <option value="/camera_back_right/image/compressed">
+      <option value="/camera_back_right/image/compressed_relay">
+      <option value="/cameras/surround_stitched">
+      <option value="/camera/surround_view/compressed">
+    </datalist>
+    <div id="img-status" class="status-line">No frames yet.</div>
+    <img id="img-preview">
+  </section>
+
+</main>
+
+<script>
+function showTab(tabId, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  document.querySelectorAll('.navbtn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+
+<script>
+let ros, pcTopic, imgTopic, stitchedTopic, pcCount = 0, imgCount = 0, stitchedCount = 0;
+let gpsTopic, poseTopic;
+let map = null, overlay = null, marker = null, mapReady = false, mapInitStarted = false;
+let latestGps = null, latestHeading = 0, smoothedCameraBearing = 0;
+let cachedPointCloudLayer = null;
+let lastMapEaseAt = 0;
+const MIN_MAP_EASE_INTERVAL_MS = 150;
+let stitchedFrameTimes = [];
+
+// Grid cell keys (display slots stay fixed; the TOPIC each one subscribes
+// to is now editable via the inputs above -- so any of these can be
+// pointed at a different/renamed relay topic, or a newly auto-discovered
+// camera, without editing this file.
+const GRID_CAMERA_KEYS = ['front_left', 'front_wide', 'front_right', 'back_left', 'back', 'back_right'];
+const gridTopics = {};
+const gridFrameTimes = {};
+
+function connectAllGridCameras() {
+  if (!ros) { alert('Connect first.'); return; }
+  for (const name of GRID_CAMERA_KEYS) {
+    const topicName = document.getElementById(`grid-topic-${name}`).value;
+    gridFrameTimes[name] = [];
+    const topic = new ROSLIB.Topic({ ros, name: topicName, messageType: 'sensor_msgs/msg/CompressedImage' });
+    topic.subscribe((msg) => {
+      const now = performance.now();
+      gridFrameTimes[name].push(now);
+      gridFrameTimes[name] = gridFrameTimes[name].filter(t => now - t <= 5000);
+      const times = gridFrameTimes[name];
+      const fps = times.length > 1
+        ? ((times.length - 1) / ((times[times.length - 1] - times[0]) / 1000)).toFixed(1)
+        : '--';
+      document.getElementById(`fps-${name}`).textContent = `${fps} fps`;
+
+      const rawUrl = `data:image/${msg.format};base64,${msg.data}`;
+      if (CAMERA_CALIBRATION[name]) {
+        // has real lens calibration -- undistort before displaying, same
+        // undistortImage() used for the panorama compositing
+        const tmpImg = new Image();
+        tmpImg.onload = () => {
+          const undistorted = undistortImage(tmpImg, name);
+          document.getElementById(`grid-${name}`).src = undistorted.toDataURL('image/jpeg', 0.9);
+        };
+        tmpImg.src = rawUrl;
+      } else {
+        document.getElementById(`grid-${name}`).src = rawUrl;
+      }
+    });
+    gridTopics[name] = topic;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Vehicle info panel. Topic names and message TYPES below are confirmed
+// against this project's actual bag (autoware_auto_vehicle_msgs). Field
+// names/enum values inside each message are best-effort guesses based on
+// common Autoware Auto conventions -- NOT independently verified here.
+// If a value looks wrong, run `ros2 interface show <type>` and adjust the
+// field names / enum maps below. Every value falls back to raw JSON if
+// the guessed field name doesn't exist on the incoming message, so this
+// stays useful even if a guess is off.
+// ---------------------------------------------------------------------
+const VEHICLE_TOPICS = {
+  velocity:        { type: 'autoware_auto_vehicle_msgs/msg/VelocityReport' },
+  steering:        { type: 'autoware_auto_vehicle_msgs/msg/SteeringReport' },
+  gear:            { type: 'autoware_auto_vehicle_msgs/msg/GearReport' },
+  control_mode:    { type: 'autoware_auto_vehicle_msgs/msg/ControlModeReport' },
+  turn_indicators: { type: 'autoware_auto_vehicle_msgs/msg/TurnIndicatorsReport' },
+  hazard_lights:   { type: 'autoware_auto_vehicle_msgs/msg/HazardLightsReport' },
+};
+
+// best-effort enum labels -- UNVERIFIED, see caveat above
+const GEAR_LABELS = { 1: 'PARK', 2: 'REVERSE', 3: 'NEUTRAL', 4: 'DRIVE', 5: 'LOW' };
+const CONTROL_MODE_LABELS = { 0: 'NO_COMMAND', 1: 'AUTONOMOUS', 2: 'AUTONOMOUS_STEER_ONLY', 3: 'AUTONOMOUS_VELOCITY_ONLY', 4: 'MANUAL', 5: 'DISENGAGED', 6: 'NOT_READY' };
+const TURN_LABELS = { 1: 'DISABLE', 2: 'ENABLE_LEFT', 3: 'ENABLE_RIGHT' };
+const HAZARD_LABELS = { 1: 'DISABLE', 2: 'ENABLE' };
+
+function fieldOrFallback(msg, fieldNames, formatter) {
+  for (const f of fieldNames) {
+    if (msg[f] !== undefined) return formatter(msg[f]);
+  }
+  // fall back to raw JSON (minus header, which is just noise here) so
+  // something useful still shows up even if the guessed field is wrong
+  const { header, ...rest } = msg;
+  return `(raw) ${JSON.stringify(rest)}`;
+}
+
+const vehicleTopics = {};
+
+function subscribeVehicleInfo() {
+  if (!ros) { alert('Connect first.'); return; }
+
+  const handlers = {
+    velocity: (msg) => fieldOrFallback(msg, ['longitudinal_velocity'], (v) => `${v.toFixed(2)} m/s`),
+    steering: (msg) => fieldOrFallback(msg, ['steering_tire_angle'], (v) => `${(v * 180 / Math.PI).toFixed(1)}\u00b0`),
+    gear: (msg) => fieldOrFallback(msg, ['report'], (v) => `${GEAR_LABELS[v] || 'unknown'} (${v})`),
+    control_mode: (msg) => fieldOrFallback(msg, ['mode'], (v) => `${CONTROL_MODE_LABELS[v] || 'unknown'} (${v})`),
+    turn_indicators: (msg) => fieldOrFallback(msg, ['report'], (v) => `${TURN_LABELS[v] || 'unknown'} (${v})`),
+    hazard_lights: (msg) => fieldOrFallback(msg, ['report'], (v) => `${HAZARD_LABELS[v] || 'unknown'} (${v})`),
+  };
+
+  for (const [key, cfg] of Object.entries(VEHICLE_TOPICS)) {
+    const topicName = document.getElementById(`veh-topic-${key}`).value;
+    const topic = new ROSLIB.Topic({ ros, name: topicName, messageType: cfg.type });
+    topic.subscribe((msg) => {
+      document.getElementById(`veh-val-${key}`).textContent = handlers[key](msg);
+    });
+    vehicleTopics[key] = topic;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Generic live parameter control -- works against ANY node's standard
+// /<node>/set_parameters service (automatically exposed by every rclpy
+// node that declares parameters). typeCode follows rcl_interfaces/msg/
+// ParameterType: 1=bool, 2=integer, 3=double, 4=string.
+// ---------------------------------------------------------------------
+const PARAM_TYPE = { BOOL: 1, INTEGER: 2, DOUBLE: 3, STRING: 4 };
+
+function setParameter(nodeName, paramName, value, typeCode, onDone) {
+  if (!ros) { alert('Connect first.'); return; }
+  const paramValue = { type: typeCode };
+  if (typeCode === PARAM_TYPE.INTEGER) paramValue.integer_value = value;
+  else if (typeCode === PARAM_TYPE.DOUBLE) paramValue.double_value = value;
+  else if (typeCode === PARAM_TYPE.STRING) paramValue.string_value = value;
+  else if (typeCode === PARAM_TYPE.BOOL) paramValue.bool_value = value;
+
+  const service = new ROSLIB.Service({
+    ros,
+    name: `${nodeName}/set_parameters`,
+    serviceType: 'rcl_interfaces/srv/SetParameters',
+  });
+  const request = new ROSLIB.ServiceRequest({ parameters: [{ name: paramName, value: paramValue }] });
+
+  service.callService(request, (result) => {
+    const ok = result && result.results && result.results[0] && result.results[0].successful;
+    if (onDone) onDone(ok, ok ? null : (result.results[0].reason || 'rejected'));
+  }, (error) => {
+    if (onDone) onDone(false, error);
+  });
+}
+
+function applyCameraSettings(resetToAuto) {
+  const nodeName = document.getElementById('cam-node-name').value;
+  const target = document.getElementById('cam-target').value;
+  const quality = parseInt(document.getElementById('cam-quality').value, 10);
+  const rate = parseFloat(document.getElementById('cam-rate').value);
+  const cameras = target === '__all__' ? GRID_CAMERA_KEYS : [target];
+  const statusEl = document.getElementById('cam-settings-status');
+  statusEl.textContent = `Applying to ${cameras.join(', ')}...`;
+
+  let pending = 0, failed = [];
+  const checkDone = () => {
+    if (pending === 0) {
+      statusEl.textContent = failed.length === 0
+        ? `Applied to ${cameras.join(', ')}.`
+        : `Done with errors on: ${failed.join(', ')} (see console)`;
+    }
+  };
+
+  for (const camName of cameras) {
+    if (resetToAuto) {
+      pending++;
+      setParameter(nodeName, `cameras.${camName}.rate_mode`, 'auto', PARAM_TYPE.STRING, (ok, err) => {
+        if (!ok) { failed.push(camName); console.error(camName, err); }
+        pending--; checkDone();
+      });
+      continue;
+    }
+    pending += 2;
+    setParameter(nodeName, `cameras.${camName}.jpeg_quality`, quality, PARAM_TYPE.INTEGER, (ok, err) => {
+      if (!ok) { failed.push(camName); console.error(camName, 'jpeg_quality', err); }
+      pending--; checkDone();
+    });
+    setParameter(nodeName, `cameras.${camName}.target_hz`, rate, PARAM_TYPE.DOUBLE, (ok, err) => {
+      if (!ok) { failed.push(camName); console.error(camName, 'target_hz', err); }
+      pending--; checkDone();
+    });
+  }
+}
+
+function applyPointCloudSettings() {
+  const nodeName = document.getElementById('pc-node-name').value;
+  const voxelSize = parseFloat(document.getElementById('pc-quality').value);
+  const rate = parseFloat(document.getElementById('pc-rate').value);
+  const statusEl = document.getElementById('pc-settings-status');
+  statusEl.textContent = 'Applying...';
+
+  let pending = 2, failed = [];
+  const checkDone = () => {
+    if (pending === 0) {
+      statusEl.textContent = failed.length === 0 ? 'Applied.' : `Done with errors: ${failed.join(', ')} (see console)`;
+    }
+  };
+  setParameter(nodeName, 'voxel_size', voxelSize, PARAM_TYPE.DOUBLE, (ok, err) => {
+    if (!ok) { failed.push('voxel_size'); console.error('voxel_size', err); }
+    pending--; checkDone();
+  });
+  setParameter(nodeName, 'target_hz', rate, PARAM_TYPE.DOUBLE, (ok, err) => {
+    if (!ok) { failed.push('target_hz'); console.error('target_hz', err); }
+    pending--; checkDone();
+  });
+}
+
+function connect() {
+  const host = document.getElementById('host').value;
+  const port = document.getElementById('port').value;
+  ros = new ROSLIB.Ros({ url: `ws://${host}:${port}` });
+
+  ros.on('connection', () => {
+    document.getElementById('status').textContent = `Connected to ws://${host}:${port}`;
+    document.getElementById('conn-dot').classList.add('on');
+  });
+  ros.on('error', (err) => {
+    document.getElementById('status').textContent = `Error: ${err}`;
+    document.getElementById('conn-dot').classList.remove('on');
+  });
+  ros.on('close', () => {
+    document.getElementById('status').textContent = 'Connection closed.';
+    document.getElementById('conn-dot').classList.remove('on');
+  });
+}
+
+// ---------------------------------------------------------------------
+// Mapbox + deck.gl overlay for the point cloud, mirroring the proven
+// approach from mapbox_live_stream.html: local sensor-frame (x=forward,
+// y=left) points are rotated into east/north meter offsets using the
+// ---------------------------------------------------------------------
+// Mapbox + deck.gl overlay for the point cloud -- ported as-is from
+// mapbox_live_stream.html (same functions, same math, same map style,
+// same intensity-based coloring). Nothing here was redesigned; only the
+// container id ('mapbox-wrap' instead of 'map-wrap') and the show/hide
+// toggle against the OrbitView canvas were adapted to fit this tool.
+// ---------------------------------------------------------------------
+
+// iki aci arasindaki en kisa farki verir, 350 -> 10 gibi 0/360 gecislerinde
+// kameranin yanlis yonde tam tur atmasini engellemek icin gerekli
+function shortestAngleDiff(fromDeg, toDeg) {
+  return ((toDeg - fromDeg + 540) % 360) - 180;
+}
+
+// Local x, y noktasini heading'e gore east, north metreye cevirir.
+function rotatePoint(x, y, bearingDeg) {
+  const rad = (bearingDeg * Math.PI) / 180;
+  const east = x * Math.sin(rad) - y * Math.cos(rad);
+  const north = x * Math.cos(rad) + y * Math.sin(rad);
+  return [east, north];
+}
+
+function quaternionToCompassBearing(orientation) {
+  const q = orientation;
+  const sinYawCos = 2 * (q.w * q.z + q.x * q.y);
+  const cosYawCos = 1 - 2 * (q.y * q.y + q.z * q.z);
+  const yawRad = Math.atan2(sinYawCos, cosYawCos);
+  const yawDeg = (yawRad * 180) / Math.PI;
+  return (90 - yawDeg + 360) % 360;
+}
+
+function computePercentileBounds(intensities, numPoints, lowPct, highPct) {
+  // sirali/kanal bazli veri yapisinda sabit adimli ornekleme onyargili olabilir,
+  // rastgele ornekleme kullaniyoruz
+  const maxSamples = 2000;
+  let sample;
+  if (numPoints <= maxSamples) {
+    sample = Array.from(intensities.slice(0, numPoints));
+  } else {
+    sample = new Array(maxSamples);
+    for (let i = 0; i < maxSamples; i++) {
+      sample[i] = intensities[Math.floor(Math.random() * numPoints)];
+    }
+  }
+  sample.sort((a, b) => a - b);
+
+  const n = sample.length;
+  const lowIdx = Math.max(0, Math.min(n - 1, Math.floor((n * lowPct) / 100)));
+  const highIdx = Math.max(0, Math.min(n - 1, Math.floor((n * highPct) / 100)));
+  return [sample[lowIdx], sample[highIdx]];
+}
+
+function intensityToColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const stops = [
+    [0.0, [30, 90, 240]],
+    [0.33, [150, 30, 220]],
+    [0.66, [235, 20, 150]],
+    [1.0, [255, 60, 20]],
+  ];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [t0, c0] = stops[i];
+    const [t1, c1] = stops[i + 1];
+    if (t >= t0 && t <= t1) {
+      const localT = (t - t0) / (t1 - t0);
+      return [
+        Math.round(c0[0] + (c1[0] - c0[0]) * localT),
+        Math.round(c0[1] + (c1[1] - c0[1]) * localT),
+        Math.round(c0[2] + (c1[2] - c0[2]) * localT),
+      ];
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+function parseAndTransformPointCloud2(msg, headingDeg) {
+  let uint8;
+  if (typeof msg.data === 'string') {
+    const bin = atob(msg.data);
+    uint8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) uint8[i] = bin.charCodeAt(i);
+  } else if (msg.data instanceof Uint8Array) {
+    uint8 = msg.data;
+  } else {
+    uint8 = new Uint8Array(msg.data);
+  }
+
+  const view = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
+  const numPoints = msg.width * msg.height;
+  const xOff = msg.fields.find(f => f.name === 'x').offset;
+  const yOff = msg.fields.find(f => f.name === 'y').offset;
+  const zOff = msg.fields.find(f => f.name === 'z').offset;
+  const iField = msg.fields.find(f => f.name === 'intensity');
+  const iOff = iField ? iField.offset : null;
+  const littleEndian = !msg.is_bigendian;
+
+  const rad = (headingDeg * Math.PI) / 180;
+  const sinR = Math.sin(rad);
+  const cosR = Math.cos(rad);
+
+  const positions = new Float32Array(numPoints * 3);
+  const intensities = iOff !== null ? new Float32Array(numPoints) : null;
+
+  const pointStep = msg.point_step;
+  for (let i = 0; i < numPoints; i++) {
+    const base = i * pointStep;
+    const x = view.getFloat32(base + xOff, littleEndian);
+    const y = view.getFloat32(base + yOff, littleEndian);
+
+    const idx3 = i * 3;
+    positions[idx3] = x * sinR - y * cosR;
+    positions[idx3 + 1] = x * cosR + y * sinR;
+    positions[idx3 + 2] = view.getFloat32(base + zOff, littleEndian);
+
+    if (intensities) intensities[i] = view.getFloat32(base + iOff, littleEndian);
+  }
+
+  let colors = null;
+  if (intensities) {
+    const [iLow, iHigh] = computePercentileBounds(intensities, numPoints, 2, 98);
+    const range = iHigh - iLow || 1;
+    colors = new Uint8Array(numPoints * 3);
+    for (let i = 0; i < numPoints; i++) {
+      const [r, g, b] = intensityToColor((intensities[i] - iLow) / range);
+      colors[i * 3] = r;
+      colors[i * 3 + 1] = g;
+      colors[i * 3 + 2] = b;
+    }
+  }
+
+  return { positions, colors, numPoints };
+}
+
+function initMap(centerLat, centerLon, bearing) {
+  mapboxgl.accessToken = document.getElementById('mapbox-token').value;
+  map = new mapboxgl.Map({
+    container: 'mapbox-wrap',
+    style: 'mapbox://styles/mapbox/standard',
+    center: [centerLon, centerLat],
+    zoom: 18,
+    pitch: 45,
+    bearing: bearing || 0,
+  });
+
+  map.on('load', () => {
+    map.setConfigProperty('basemap', 'lightPreset', 'day');
+    overlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
+    map.addControl(overlay);
+    marker = new mapboxgl.Marker({ color: '#00ff00' })
+      .setLngLat([centerLon, centerLat])
+      .addTo(map);
+    mapReady = true;
+  });
+}
+
+function subscribeGpsPose() {
+  if (!ros) { alert('Connect first.'); return; }
+  const gpsName = document.getElementById('gps-topic').value;
+  const poseName = document.getElementById('pose-topic').value;
+  const statusEl = document.getElementById('gps-pose-status');
+
+  gpsTopic = new ROSLIB.Topic({ ros, name: gpsName, messageType: 'sensor_msgs/msg/NavSatFix' });
+  gpsTopic.subscribe((msg) => {
+    latestGps = { latitude: msg.latitude, longitude: msg.longitude };
+    statusEl.textContent = `GPS: ${msg.latitude.toFixed(6)}, ${msg.longitude.toFixed(6)} | bearing: ${latestHeading.toFixed(1)}°`;
+
+    if (!mapInitStarted) {
+      mapInitStarted = true;
+      smoothedCameraBearing = latestHeading;
+      initMap(msg.latitude, msg.longitude, smoothedCameraBearing);
+    } else if (mapReady) {
+      const now = performance.now();
+      if (now - lastMapEaseAt >= MIN_MAP_EASE_INTERVAL_MS) {
+        lastMapEaseAt = now;
+        // ani sicramalari yumusatmak icin bearing'i yavasca hedefe yaklastiriyoruz
+        const diff = shortestAngleDiff(smoothedCameraBearing, latestHeading);
+        smoothedCameraBearing = (smoothedCameraBearing + diff * 0.15 + 360) % 360;
+        map.easeTo({ center: [msg.longitude, msg.latitude], bearing: smoothedCameraBearing, duration: MIN_MAP_EASE_INTERVAL_MS });
+        if (marker) marker.setLngLat([msg.longitude, msg.latitude]);
+      }
+    }
+  });
+
+  poseTopic = new ROSLIB.Topic({ ros, name: poseName, messageType: 'geometry_msgs/msg/PoseWithCovarianceStamped' });
+  poseTopic.subscribe((msg) => {
+    latestHeading = quaternionToCompassBearing(msg.pose.pose.orientation);
+  });
+}
+
+
+function subscribePointCloud() {
+  if (!ros) { alert('Connect first.'); return; }
+  const name = document.getElementById('pc-topic').value;
+  const type = document.getElementById('pc-type').value;
+
+  pcTopic = new ROSLIB.Topic({ ros, name, messageType: type });
+
+  pcTopic.subscribe((msg) => {
+    pcCount++;
+
+    if (!mapReady || !latestGps) {
+      document.getElementById('pc-status').textContent =
+        `Received message #${pcCount} on ${name} -- waiting for GPS/Pose fix to place it on the map`;
+      return;
+    }
+    document.getElementById('pc-status').textContent = `Received message #${pcCount} on ${name}`;
+
+    const { positions, colors, numPoints } = parseAndTransformPointCloud2(msg, smoothedCameraBearing);
+
+    const attributes = { getPosition: { value: positions, size: 3 } };
+    if (colors) attributes.getColor = { value: colors, size: 3 };
+
+    // update the existing layer's props instead of constructing a new instance -
+    // lets deck.gl diff and reuse GPU buffers instead of re-initializing everything
+    if (cachedPointCloudLayer) {
+      cachedPointCloudLayer = cachedPointCloudLayer.clone({
+        data: { length: numPoints, attributes },
+        coordinateOrigin: [latestGps.longitude, latestGps.latitude],
+        getColor: colors ? undefined : [80, 200, 255],
+      });
+    } else {
+      cachedPointCloudLayer = new deck.PointCloudLayer({
+        id: 'point-cloud-layer',
+        data: { length: numPoints, attributes },
+        coordinateSystem: deck.COORDINATE_SYSTEM.METER_OFFSETS,
+        coordinateOrigin: [latestGps.longitude, latestGps.latitude],
+        getColor: colors ? undefined : [80, 200, 255],
+        pointSize: 0.08,
+        sizeUnits: 'meters',
+      });
+    }
+
+    overlay.setProps({ layers: [cachedPointCloudLayer] });
+  });
+}
+
+function subscribeStitched() {
+  if (!ros) { alert('Connect first.'); return; }
+  const name = document.getElementById('stitched-topic').value;
+  stitchedTopic = new ROSLIB.Topic({ ros, name, messageType: 'sensor_msgs/msg/CompressedImage' });
+
+  stitchedFrameTimes = [];
+
+  stitchedTopic.subscribe((msg) => {
+    stitchedCount++;
+    const now = performance.now();
+    stitchedFrameTimes.push(now);
+    // keep only the last 5s of timestamps for a rolling fps estimate
+    stitchedFrameTimes = stitchedFrameTimes.filter(t => now - t <= 5000);
+    const fps = stitchedFrameTimes.length > 1
+      ? ((stitchedFrameTimes.length - 1) / ((stitchedFrameTimes[stitchedFrameTimes.length - 1] - stitchedFrameTimes[0]) / 1000)).toFixed(2)
+      : '...';
+
+    document.getElementById('stitched-status').textContent =
+      `Received frame #${stitchedCount} on ${name} (format: ${msg.format}) | ~${fps} fps (5s rolling avg)`;
+    document.getElementById('stitched-preview').src = `data:image/${msg.format};base64,${msg.data}`;
+  });
+}
+
+function subscribeImage() {
+  if (!ros) { alert('Connect first.'); return; }
+  const name = document.getElementById('img-topic').value;
+  imgTopic = new ROSLIB.Topic({ ros, name, messageType: 'sensor_msgs/msg/CompressedImage' });
+
+  imgTopic.subscribe((msg) => {
+    imgCount++;
+    document.getElementById('img-status').textContent = `Received frame #${imgCount} on ${name} (format: ${msg.format})`;
+    document.getElementById('img-preview').src = `data:image/${msg.format};base64,${msg.data}`;
+  });
+}
+
+// ---------------------------------------------------------------------
+// Live panorama (browser-side stitching from the 6 raw "Camera grid"
+// feeds -- no calibration data available, so alignment is done visually
+// via per-camera sliders instead of a homography/projection. Each camera
+// is drawn into its own slot of the panorama canvas; slots are made wider
+// than 1/6th of the canvas so neighbors overlap, and a linear alpha
+// feather is applied on both edges of every slot so the overlap band
+// cross-fades instead of showing a hard seam. This does not remove
+// parallax ghosting on close objects (that needs real depth data / a
+// homography per depth plane) but it hides the seam itself and gives a
+// continuous, calibratable strip that reacts live as the vehicle moves.
+// ---------------------------------------------------------------------
+const PANO_DEFAULT_ORDER = ['front_left', 'front_wide', 'front_right', 'back_right', 'back', 'back_left'];
+const panoSlotState = PANO_DEFAULT_ORDER.map(cam => ({ cam, hOffset: 0, vOffset: 0, widthScale: 1.15, undistort: true }));
+
+// ---------------------------------------------------------------------
+// Camera calibration -- mirrors CAMERA_CONFIGS in test_merge.py exactly
+// (same camera_matrix / dist_coeffs, same convention: distCoeffs is
+// [k1, k2, p1, p2, k3]). All 6 cameras share the same physical
+// lens/distortion characteristics, so the same intrinsics/distortion
+// coefficients are applied to all of them here.
+// ---------------------------------------------------------------------
+const SHARED_CALIBRATION = {
+  width: 1920,
+  height: 1208,
+  cameraMatrix: [
+    [957.5924619296435, 0.0, 959.3565786290242],
+    [0.0, 959.2310844319446, 643.6836005728799],
+    [0.0, 0.0, 1.0]
+  ],
+  distCoeffs: [
+    -0.31601873247481005, 0.10239219254756483,
+    0.00036607846825403574, -0.00010301821755756382, -0.01519798350002023
+  ]
+};
+
+const CAMERA_CALIBRATION = Object.fromEntries(
+  GRID_CAMERA_KEYS.map((key) => [key, SHARED_CALIBRATION])
+);
+
+// Working resolution the undistort map is computed at, independent of the
+// camera's native resolution -- keeps the per-frame cost bounded even for
+// a 1920x1208 source. Camera matrix values are scaled down to match
+// (distCoeffs are resolution-independent -- they act on normalized
+// coordinates -- so they're used as-is).
+const UNDISTORT_WORKING_WIDTH = 640;
+const undistortMapCache = {};
+const undistortFrameCache = {};
+
+function getUndistortMap(camKey) {
+  if (undistortMapCache[camKey]) return undistortMapCache[camKey];
+  const cal = CAMERA_CALIBRATION[camKey];
+  if (!cal) return null;
+
+  const scale = UNDISTORT_WORKING_WIDTH / cal.width;
+  const w = Math.round(cal.width * scale);
+  const h = Math.round(cal.height * scale);
+  const fx = cal.cameraMatrix[0][0] * scale, fy = cal.cameraMatrix[1][1] * scale;
+  const cx = cal.cameraMatrix[0][2] * scale, cy = cal.cameraMatrix[1][2] * scale;
+  const [k1, k2, p1, p2, k3] = cal.distCoeffs;
+
+  // Same formula OpenCV's initUndistortRectifyMap uses (new camera matrix
+  // == original K here, i.e. alpha=1-ish: no cropping of the FOV, some
+  // black corners are expected instead -- matches the "full picture,
+  // nothing lost" preference from the panorama Fit mode work).
+  const mapX = new Float32Array(w * h);
+  const mapY = new Float32Array(w * h);
+  for (let v = 0; v < h; v++) {
+    for (let u = 0; u < w; u++) {
+      const x = (u - cx) / fx;
+      const y = (v - cy) / fy;
+      const r2 = x * x + y * y;
+      const radial = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+      const xd = x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x);
+      const yd = y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y;
+      const idx = v * w + u;
+      mapX[idx] = xd * fx + cx;
+      mapY[idx] = yd * fy + cy;
+    }
+  }
+
+  const result = { w, h, mapX, mapY };
+  undistortMapCache[camKey] = result;
+  return result;
+}
+
+// Bilinear remap (same interpolation test_merge.py uses: cv2.INTER_LINEAR)
+// from `img` (an <img> or <canvas>) into a new same-size-as-map <canvas>.
+// Cached per camera on the source's data-URL so it only redoes the work
+// when a genuinely new frame arrives, not on every animation frame.
+function undistortImage(img, camKey) {
+  const map = getUndistortMap(camKey);
+  if (!map) return img;
+
+  const srcKey = img.currentSrc || img.src || null;
+  const cached = undistortFrameCache[camKey];
+  if (srcKey && cached && cached.srcKey === srcKey) return cached.canvas;
+
+  const w = map.w, h = map.h;
+  const srcCanvas = document.createElement('canvas');
+  srcCanvas.width = w; srcCanvas.height = h;
+  const srcCtx = srcCanvas.getContext('2d');
+  srcCtx.drawImage(img, 0, 0, w, h);
+  const srcData = srcCtx.getImageData(0, 0, w, h).data;
+
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = w; outCanvas.height = h;
+  const outCtx = outCanvas.getContext('2d');
+  const outImageData = outCtx.createImageData(w, h);
+  const outData = outImageData.data;
+
+  for (let i = 0; i < w * h; i++) {
+    const sx = map.mapX[i], sy = map.mapY[i];
+    const di = i * 4;
+    if (sx < 0 || sy < 0 || sx >= w - 1 || sy >= h - 1) {
+      outData[di] = 0; outData[di + 1] = 0; outData[di + 2] = 0; outData[di + 3] = 255;
+      continue;
+    }
+    const x0 = Math.floor(sx), y0 = Math.floor(sy);
+    const fx2 = sx - x0, fy2 = sy - y0;
+    const i00 = (y0 * w + x0) * 4, i10 = (y0 * w + x0 + 1) * 4;
+    const i01 = ((y0 + 1) * w + x0) * 4, i11 = ((y0 + 1) * w + x0 + 1) * 4;
+    for (let c = 0; c < 3; c++) {
+      const top = srcData[i00 + c] * (1 - fx2) + srcData[i10 + c] * fx2;
+      const bot = srcData[i01 + c] * (1 - fx2) + srcData[i11 + c] * fx2;
+      outData[di + c] = top * (1 - fy2) + bot * fy2;
+    }
+    outData[di + 3] = 255;
+  }
+  outCtx.putImageData(outImageData, 0, 0);
+
+  if (srcKey) undistortFrameCache[camKey] = { srcKey, canvas: outCanvas };
+  return outCanvas;
+}
+let panoRunning = false;
+let panoRAF = null;
+
+function buildPanoControls() {
+  const wrap = document.getElementById('pano-slots');
+  wrap.innerHTML = '';
+  panoSlotState.forEach((slot, i) => {
+    const row = document.createElement('div');
+    row.className = 'pano-slot-row';
+    row.innerHTML = `
+      <div class="slot-label">Slot ${i + 1}</div>
+      <select onchange="panoSlotState[${i}].cam = this.value; buildPanoControls();">
+        ${GRID_CAMERA_KEYS.map(k => `<option value="${k}" ${k === slot.cam ? 'selected' : ''}>${k}</option>`).join('')}
+      </select>
+      <div class="slider-field">
+        <span>Horizontal: <span id="pano-h-${i}">${slot.hOffset}</span>px</span>
+        <input type="range" min="-200" max="200" value="${slot.hOffset}"
+          oninput="panoSlotState[${i}].hOffset = parseInt(this.value); document.getElementById('pano-h-${i}').textContent = this.value;">
+      </div>
+      <div class="slider-field">
+        <span>Vertical: <span id="pano-v-${i}">${slot.vOffset}</span>px</span>
+        <input type="range" min="-100" max="100" value="${slot.vOffset}"
+          oninput="panoSlotState[${i}].vOffset = parseInt(this.value); document.getElementById('pano-v-${i}').textContent = this.value;">
+      </div>
+      <div class="slider-field">
+        <span>Width: <span id="pano-w-${i}">${slot.widthScale.toFixed(2)}</span>x</span>
+        <input type="range" min="70" max="180" value="${Math.round(slot.widthScale * 100)}"
+          oninput="panoSlotState[${i}].widthScale = parseInt(this.value) / 100; document.getElementById('pano-w-${i}').textContent = panoSlotState[${i}].widthScale.toFixed(2);">
+      </div>
+      <label style="display:flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); ${CAMERA_CALIBRATION[slot.cam] ? '' : 'opacity:0.4;'}" title="${CAMERA_CALIBRATION[slot.cam] ? 'Undistort using real calibration' : 'No calibration data for this camera yet'}">
+        <input type="checkbox" ${slot.undistort ? 'checked' : ''} onchange="panoSlotState[${i}].undistort = this.checked;">
+        Undistort
+      </label>`;
+    wrap.appendChild(row);
+  });
+}
+
+// draws `img` into `w`x`h`, either cropping to fill (cover, like CSS
+// object-fit: cover) or letterboxing to show the whole frame (contain,
+// like CSS object-fit: contain) -- shifted vertically by vOffset (px)
+function drawImageCover(ctx, img, dx, dy, w, h, vOffset, fitMode) {
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return;
+  const srcAspect = iw / ih, dstAspect = w / h;
+
+  if (fitMode === 'contain') {
+    let dw, dh;
+    if (srcAspect > dstAspect) { dw = w; dh = w / srcAspect; }
+    else { dh = h; dw = h * srcAspect; }
+    const ddx = dx + (w - dw) / 2;
+    const ddy = dy + (h - dh) / 2 + vOffset;
+    ctx.drawImage(img, 0, 0, iw, ih, ddx, ddy, dw, dh);
+    return;
+  }
+
+  let sx, sy, sw, sh;
+  if (srcAspect > dstAspect) {
+    sh = ih; sw = ih * dstAspect;
+    sx = (iw - sw) / 2; sy = 0;
+  } else {
+    sw = iw; sh = iw / dstAspect;
+    sx = 0; sy = (ih - sh) / 2 + vOffset;
+  }
+  sy = Math.max(0, Math.min(ih - sh, sy));
+  ctx.drawImage(img, sx, sy, sw, sh, dx, dy, w, h);
+}
+
+function resizePanoCanvas(newHeight) {
+  const canvas = document.getElementById('pano-canvas');
+  canvas.height = parseInt(newHeight, 10);
+}
+
+function drawPanoSlot(ctx, slot, centerX, sliceWidth, canvasW, canvasH, feather, fitMode) {
+  const img = document.getElementById(`grid-${slot.cam}`);
+  if (!img || !img.naturalWidth) return;
+  const width = sliceWidth * slot.widthScale;
+
+  const off = document.createElement('canvas');
+  off.width = Math.round(width);
+  off.height = canvasH;
+  const octx = off.getContext('2d');
+  const source = (slot.undistort && CAMERA_CALIBRATION[slot.cam]) ? undistortImage(img, slot.cam) : img;
+  drawImageCover(octx, source, 0, 0, off.width, off.height, slot.vOffset, fitMode);
+
+  const f = Math.min(feather, width / 2) / width;
+  if (f > 0) {
+    octx.globalCompositeOperation = 'destination-in';
+    const grad = octx.createLinearGradient(0, 0, off.width, 0);
+    grad.addColorStop(0, 'rgba(255,255,255,0)');
+    grad.addColorStop(f, 'rgba(255,255,255,1)');
+    grad.addColorStop(1 - f, 'rgba(255,255,255,1)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    octx.fillStyle = grad;
+    octx.fillRect(0, 0, off.width, off.height);
+    octx.globalCompositeOperation = 'source-over';
+  }
+
+  ctx.drawImage(off, Math.round(centerX + slot.hOffset - width / 2), 0);
+}
+
+function renderPanoFrame() {
+  const canvas = document.getElementById('pano-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const feather = parseInt(document.getElementById('pano-feather').value, 10);
+  const fitMode = document.getElementById('pano-fit-mode').value;
+  const sliceWidth = canvas.width / panoSlotState.length;
+
+  panoSlotState.forEach((slot, i) => {
+    const centerX = i * sliceWidth + sliceWidth / 2;
+    drawPanoSlot(ctx, slot, centerX, sliceWidth, canvas.width, canvas.height, feather, fitMode);
+  });
+
+  if (panoRunning) panoRAF = requestAnimationFrame(renderPanoFrame);
+}
+
+function startPanorama() {
+  if (panoRunning) return;
+  panoRunning = true;
+  renderPanoFrame();
+}
+
+function stopPanorama() {
+  panoRunning = false;
+  if (panoRAF) cancelAnimationFrame(panoRAF);
+}
+
+buildPanoControls();
+</script>
+
+</body>
+</html>
